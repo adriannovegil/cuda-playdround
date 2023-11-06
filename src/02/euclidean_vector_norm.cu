@@ -22,9 +22,35 @@ const int DEFAULT_N = 200;
 const int DEFAULT_BLOCK_SIZE = 128; // Default CUDA block size
 const float A_val = 1.0f;           // Default value for the all matrix elements
 
+void print_matrix(float *matrix, const unsigned int m, const unsigned int n)
+{
+    unsigned int i, j;
+    for (i = 0; i < m; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            printf("%f ", matrix[i * n + j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+void populate_matrix(float *matrix, const unsigned int m, const unsigned int n)
+{
+    unsigned int i, j;
+    for (i = 0; i < m; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            matrix[i * n + j] = A_val;
+        }
+    }
+}
+
 // CPU execution
 // ============================================================================
-void euclidean_vec_norm_CPU(float *a, float *c, int m, int n)
+void euclidean_vec_norm_CPU(float *a, float *c, const unsigned int m, const unsigned int n)
 {
     unsigned int i, j;
     float res;
@@ -41,7 +67,7 @@ void euclidean_vec_norm_CPU(float *a, float *c, int m, int n)
 
 // Kernel definition
 // ============================================================================
-__global__ void euclidean_vec_norm_GPU(float *a, float *c, int m, int n)
+__global__ void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m, const unsigned int n)
 {
     int row = blockDim.y * blockIdx.y + threadIdx.y;
 
@@ -80,12 +106,12 @@ int main(int argc, char *argv[])
     cudaMalloc(&d_C, vectorNumBytes);
 
     // Initialize host and local matrix A
-    for (int i = 0; i < m * n; i++)
-    {
-        h_A[i] = A_val;
-        l_A[i] = A_val;
-    }
-    // Initialize host and local array C for results
+    populate_matrix(h_A, m, n);
+    populate_matrix(l_A, m, n);
+    //print_matrix(h_A, m, n);
+    //print_matrix(l_A, m, n);
+
+    //  Initialize host and local array C for results
     for (int i = 0; i < m; i++)
     {
         h_C[i] = 0;
