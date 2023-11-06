@@ -20,7 +20,24 @@ const int DEFAULT_M = 100;
 const int DEFAULT_N = 200;
 
 const int DEFAULT_BLOCK_SIZE = 128; // Default CUDA block size
-const float A_val = 1.0f;   // Default value for the all matrix elements
+const float A_val = 1.0f;           // Default value for the all matrix elements
+
+// CPU execution
+// ============================================================================
+void euclidean_vec_norm_CPU(float *a, float *c, int m, int n)
+{
+    unsigned int i, j;
+    float res;
+    for (i = 0; i < m; i++)
+    {
+        res = 0;
+        for (j = 0; j < n; j++)
+        {
+            res += (a[i * n + j] * a[i * n + j]);
+        }
+        c[i] = res;
+    }
+}
 
 // Kernel definition
 // ============================================================================
@@ -41,7 +58,6 @@ __global__ void euclidean_vec_norm_GPU(float *a, float *c, int m, int n)
 // ============================================================================
 int main(int argc, char *argv[])
 {
-
     // Read from args the matrix size
     unsigned int m = (argc > 1) ? atoi(argv[1]) : DEFAULT_M;
     unsigned int n = (argc > 2) ? atoi(argv[2]) : DEFAULT_N;
@@ -52,24 +68,28 @@ int main(int argc, char *argv[])
     // Number of bytes to allocate for MxN matrix
     size_t matrixNumBytes = m * n * sizeof(float);
 
-    float *h_A, *h_C, *d_A, *d_C;
+    float *h_A, *h_C, *l_A, *l_C, *d_A, *d_C;
 
-    h_A = new float[m*n];
+    h_A = new float[m * n];
     h_C = new float[m];
+    l_A = new float[m * n];
+    l_C = new float[m];
 
     // Allocate device memory and copy input data over to GPU
     cudaMalloc(&d_A, matrixNumBytes);
     cudaMalloc(&d_C, vectorNumBytes);
 
-    // Initialize host matrix A
-    for (int i = 0; i < m*n; i++)
+    // Initialize host and local matrix A
+    for (int i = 0; i < m * n; i++)
     {
         h_A[i] = A_val;
+        l_A[i] = A_val;
     }
-    // Initialize host array C
+    // Initialize host and local array C for results
     for (int i = 0; i < m; i++)
     {
         h_C[i] = 0;
+        l_C[i] = 0;
     }
 
     // Copy data from host matrix A to device matrix
@@ -91,11 +111,13 @@ int main(int argc, char *argv[])
     // Copy data from device to CPU
     cudaMemcpy(h_C, d_C, vectorNumBytes, cudaMemcpyDeviceToHost);
 
+    euclidean_vec_norm_CPU(l_A, l_C, m, n);
+
     // Verify results
     for (int i = 0; i < m; i++)
-        if (h_C[i] != (float)n)
+        if (h_C[i] != l_C[i])
         {
-            printf("Mismatch at index %d, was: %f, should be: %d\n", i, h_C[i], n);
+            printf("Mismatch at index %d, was: %f, should be: %f\n", i, h_C[i], l_C[i]);
             return -1;
         }
 
