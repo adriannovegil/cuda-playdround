@@ -1,4 +1,4 @@
-/*
+/**
  * Lecture 3 - Euclidean Vector Norm
  *
  * Implement a CUDA code that calculates the sumatory of the square for several
@@ -20,8 +20,10 @@ const int DEFAULT_M = 100;
 const int DEFAULT_N = 200;
 
 const int DEFAULT_BLOCK_SIZE = 128; // Default CUDA block size
-const float A_val = 1.0f;           // Default value for the all matrix elements
 
+/**
+ * Prints the values of the matrix to the screen
+ */
 void print_matrix(float *matrix, const unsigned int m, const unsigned int n)
 {
     unsigned int i, j;
@@ -36,6 +38,9 @@ void print_matrix(float *matrix, const unsigned int m, const unsigned int n)
     printf("\n");
 }
 
+/**
+ * Populate the matrix with values for the tests
+*/
 void populate_matrix(float *matrix, const unsigned int m, const unsigned int n)
 {
     unsigned int i, j;
@@ -43,7 +48,7 @@ void populate_matrix(float *matrix, const unsigned int m, const unsigned int n)
     {
         for (j = 0; j < n; j++)
         {
-            matrix[i * n + j] = A_val;
+            matrix[i * n + j] = (i + 1) + j;
         }
     }
 }
