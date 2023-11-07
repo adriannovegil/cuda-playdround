@@ -24,6 +24,18 @@ const int DEFAULT_N = 200;
 const int DEFAULT_BLOCK_SIZE = 128; // Default CUDA block size
 const float ZERO_VAL = 0.0f;
 
+// Macro for checking errors in CUDA API calls
+#define cudaErrorCheck(call)                                                                     \
+    do                                                                                           \
+    {                                                                                            \
+        cudaError_t cuErr = call;                                                                \
+        if (cudaSuccess != cuErr)                                                                \
+        {                                                                                        \
+            printf("CUDA Error - %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(cuErr)); \
+            exit(0);                                                                             \
+        }                                                                                        \
+    } while (0)
+
 /**
  * Para medir el tiempo transcurrido (elapsed time):
  *
@@ -65,6 +77,21 @@ void myElapsedtime(const resnfo start, const resnfo end, timenfo *const t)
 }
 
 /**
+ * Populate the matrix with values for the tests
+ */
+void populate_matrix(float *matrix, const unsigned int m, const unsigned int n)
+{
+    unsigned int i, j;
+    for (i = 0; i < m; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            matrix[i * n + j] = ((i + 1) + j) % 10;
+        }
+    }
+}
+
+/**
  * Prints the values of the matrix to the screen
  */
 void print_matrix(float *matrix, const unsigned int m, const unsigned int n)
@@ -82,34 +109,6 @@ void print_matrix(float *matrix, const unsigned int m, const unsigned int n)
 }
 
 /**
- * Populate the matrix with values for the tests
- */
-void populate_matrix(float *matrix, const unsigned int m, const unsigned int n)
-{
-    unsigned int i, j;
-    for (i = 0; i < m; i++)
-    {
-        for (j = 0; j < n; j++)
-        {
-            matrix[i * n + j] = (i + 1) + j;
-        }
-    }
-}
-
-/**
- * Prints the values of the array to the screen
-*/
-void print_array(float *array, const unsigned int m)
-{
-    unsigned int i;
-    for (i = 0; i < m; i++)
-    {
-        printf("%f ", array[i]);
-    }
-    printf("\n");
-}
-
-/**
  * Populate the array with the value
  */
 void populate_array(float *array, const unsigned int m, const float value)
@@ -122,14 +121,44 @@ void populate_array(float *array, const unsigned int m, const float value)
 }
 
 /**
- * Compare the result vectors
+ * Prints the values of the array to the screen
  */
-bool check_result(float *cpuArray, float *gpuArray, const unsigned int m)
+void print_array(float *array, const unsigned int m)
+{
+    unsigned int i;
+    for (i = 0; i < m; i++)
+    {
+        printf("%f ", array[i]);
+    }
+    printf("\n");
+}
+
+/**
+ * Function that comprate the elements of two matrix's
+ */
+bool compare_matrix(float *m1, float *m2, const unsigned int m, const unsigned int n)
+{
+    unsigned int i, j;
+    for (i = 0; i < m; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            if (m1[i * n + j] != m2[i * n + j])
+                return false;
+        }
+    }
+    return true;
+}
+
+/**
+ * Function that comprate the elements of two array's
+ */
+bool compare_array(float *a1, float *a2, const unsigned int m)
 {
     for (int i = 0; i < m; i++)
-        if (cpuArray[i] != gpuArray[i])
+        if (a1[i] != a2[i])
         {
-            printf("Mismatch at index %d, was: %f, should be: %f\n", i, gpuArray[i], cpuArray[i]);
+            printf("Mismatch at index %d, was: %f, should be: %f\n", i, a1[i], a2[i]);
             return false;
         }
     return true;
@@ -138,22 +167,23 @@ bool check_result(float *cpuArray, float *gpuArray, const unsigned int m)
 // CPU execution
 // ============================================================================
 
+/**
+ * Eucliden vec norm function that perform the operation in the CPU
+*/
 void euclidean_vec_norm_CPU(float *a, float *c, const unsigned int m, const unsigned int n)
 {
-    unsigned int i, j;
-    float res;
     resnfo start, end;
     timenfo time;
 
+    unsigned int row, colum;
+
     timestamp(&start); // Start time measurement
-    for (i = 0; i < m; i++)
+    for (row = 0; row < m; row++)
     {
-        res = 0;
-        for (j = 0; j < n; j++)
+        for (colum = 0; colum < n; colum++)
         {
-            res += (a[i * n + j] * a[i * n + j]);
+            c[row] += (a[row * n + colum] * a[row * n + colum]);
         }
-        c[i] = res;
     }
     timestamp(&end); // Stop time measurement
     myElapsedtime(start, end, &time);
@@ -168,17 +198,21 @@ void euclidean_vec_norm_CPU(float *a, float *c, const unsigned int m, const unsi
  */
 __global__ void euclidean_vec_norm_GPU_kernel(float *a, float *c, const unsigned int m, const unsigned int n)
 {
+    unsigned int colum;
     int row = blockDim.y * blockIdx.y + threadIdx.y;
 
     if (row < m)
     {
-        for (int i = 0; i < n; i++)
+        for (colum = 0; colum < n; colum++)
         {
-            c[row] += (a[row * n + i] * a[row * n + i]);
+            c[row] += (a[row * n + colum] * a[row * n + colum]);
         }
     }
 }
 
+/**
+ * Eucliden vec norm function that perform the operation in the GPU
+*/
 void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
                             const unsigned int n, const unsigned int block_size)
 {
@@ -193,12 +227,12 @@ void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
     size_t matrixNumBytes = m * n * sizeof(float);
 
     // Allocate device memory and copy input data over to GPU
-    cudaMalloc(&d_A, matrixNumBytes);
-    cudaMalloc(&d_C, vectorNumBytes);
+    cudaErrorCheck(cudaMalloc(&d_A, matrixNumBytes));
+    cudaErrorCheck(cudaMalloc(&d_C, vectorNumBytes));
 
     // Copy data from host matrix A to device matrix
-    cudaMemcpy(d_A, a, matrixNumBytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_C, c, vectorNumBytes, cudaMemcpyHostToDevice);
+    cudaErrorCheck(cudaMemcpy(d_A, a, matrixNumBytes, cudaMemcpyHostToDevice));
+    cudaErrorCheck(cudaMemcpy(d_C, c, vectorNumBytes, cudaMemcpyHostToDevice));
 
     // Launch kernel
     //  - threads_per_block: number of CUDA threads per grid block
@@ -208,23 +242,44 @@ void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
                            block_size,
                            1); // dim3 variable holds 3 dimensions
     dim3 blocks_in_grid(1,
-                        // ceil(float(m) / threads_per_block.y),
-                        (m * m + threads_per_block.y - 1) / threads_per_block.y,
+                        ceil(float(m) / threads_per_block.y),
+                        //(m * m + threads_per_block.y - 1) / threads_per_block.y,
                         1);
+
+    printf(" threads_per_block         = %d\n", block_size);
+    printf(" blocks_in_grid            = %d\n", (m * m + threads_per_block.y - 1) / threads_per_block.y);
+    printf(" blocks_in_grid (ceil)     = %f\n", ceil(float(m) / threads_per_block.y));
 
     timestamp(&start); // Start time measurement
     euclidean_vec_norm_GPU_kernel<<<blocks_in_grid, threads_per_block>>>(d_A, d_C, m, n);
+
+    // Check for errors in kernel launch (e.g. invalid execution configuration paramters)
+    cudaError_t cuErrSync = cudaGetLastError();
+    if (cuErrSync != cudaSuccess)
+    {
+        printf("CUDA Error - %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(cuErrSync));
+        exit(0);
+    }
+
+    // Check for errors on the GPU after control is returned to CPU
+    cudaError_t cuErrAsync = cudaDeviceSynchronize();
+    if (cuErrAsync != cudaSuccess)
+    {
+        printf("CUDA Error - %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(cuErrAsync));
+        exit(0);
+    }
+
     cudaDeviceSynchronize();
     timestamp(&end); // Stop time measurement
     myElapsedtime(start, end, &time);
     printtime(time);
 
     // Copy data from device to CPU
-    cudaMemcpy(c, d_C, vectorNumBytes, cudaMemcpyDeviceToHost);
+    cudaErrorCheck(cudaMemcpy(c, d_C, vectorNumBytes, cudaMemcpyDeviceToHost));
 
     // Free CPU and GPU memory
-    cudaFree(d_A);
-    cudaFree(d_C);
+    cudaErrorCheck(cudaFree(d_A));
+    cudaErrorCheck(cudaFree(d_C));
 }
 
 // Main program
@@ -232,6 +287,10 @@ void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
 int main(int argc, char *argv[])
 {
     float *h_A, *h_C, *l_A, *l_C;
+
+    printf("--------------------------------\n");
+    printf(" Euclidean Vector Norm\n");
+    printf("--------------------------------\n");
 
     // Read from args the matrix size
     unsigned int m = (argc > 1) ? atoi(argv[1]) : DEFAULT_M;
@@ -246,31 +305,43 @@ int main(int argc, char *argv[])
     // Initialize host and local matrix A
     populate_matrix(h_A, m, n);
     populate_matrix(l_A, m, n);
+    //print_matrix(h_A, m, n);
+    //print_matrix(l_A, m, n);
+
+    if (!compare_matrix(h_A, l_A, m, n))
+    {
+        printf("ERROR: The host matrix and the local matrix are different!!\n");
+        return -1;
+    }
 
     // Initialize host and local array C for results
     populate_array(h_C, m, ZERO_VAL);
     populate_array(l_C, m, ZERO_VAL);
+    //print_array(h_C, m);
+    //print_array(l_C, m);
 
     // GPU Execution
     euclidean_vec_norm_GPU(h_A, h_C, m, n, block_size);
-    printf(" -> Calculate the Euclidean vector norm in the GPU (%d vectos, %d elements)\n\n", m, n);
+    printf(" -> Calculate the Euclidean vector norm in the GPU (%d vectors, %d elements)\n", m, n);
 
     // CPU execution
     euclidean_vec_norm_CPU(l_A, l_C, m, n);
-    printf(" -> Calculate the Euclidean vector norm in the CPU (%d vectos, %d elements)\n\n", m, n);
+    printf(" -> Calculate the Euclidean vector norm in the CPU (%d vectors, %d elements)\n", m, n);
+
+    //print_array(h_C, m);
+    //print_array(l_C, m);
 
     // Verify results
-    if (!check_result(l_C, h_C, m))
+    if (!compare_array(l_C, h_C, m))
     {
         return -1;
     }
 
-    printf("\n--------------------------------\n");
-    printf("__SUCCESS__\n");
+    printf(" M                         = %d\n", m);
+    printf(" N                         = %d\n", n);
     printf("--------------------------------\n");
-    printf("M                         = %d\n", m);
-    printf("N                         = %d\n", n);
-    printf("--------------------------------\n\n");
+    printf(" SUCCESS\n");
+    printf("--------------------------------\n");
 
     return 0;
 }
