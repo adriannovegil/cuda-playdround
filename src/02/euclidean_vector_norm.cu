@@ -169,7 +169,7 @@ bool compare_array(float *a1, float *a2, const unsigned int m)
 
 /**
  * Eucliden vec norm function that perform the operation in the CPU
-*/
+ */
 void euclidean_vec_norm_CPU(float *a, float *c, const unsigned int m, const unsigned int n)
 {
     resnfo start, end;
@@ -212,7 +212,7 @@ __global__ void euclidean_vec_norm_GPU_kernel(float *a, float *c, const unsigned
 
 /**
  * Eucliden vec norm function that perform the operation in the GPU
-*/
+ */
 void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
                             const unsigned int n, const unsigned int block_size)
 {
@@ -243,15 +243,19 @@ void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
                            1); // dim3 variable holds 3 dimensions
     dim3 blocks_in_grid(1,
                         ceil(float(m) / threads_per_block.y),
-                        //(m * m + threads_per_block.y - 1) / threads_per_block.y,
+                        //(m + threads_per_block.y - 1) / threads_per_block.y,
                         1);
 
     printf(" threads_per_block         = %d\n", block_size);
-    printf(" blocks_in_grid            = %d\n", (m * m + threads_per_block.y - 1) / threads_per_block.y);
+    // printf(" blocks_in_grid            = %d\n", (m + threads_per_block.y - 1) / threads_per_block.y);
     printf(" blocks_in_grid (ceil)     = %f\n", ceil(float(m) / threads_per_block.y));
 
     timestamp(&start); // Start time measurement
     euclidean_vec_norm_GPU_kernel<<<blocks_in_grid, threads_per_block>>>(d_A, d_C, m, n);
+    cudaDeviceSynchronize();
+    timestamp(&end); // Stop time measurement
+    myElapsedtime(start, end, &time);
+    printtime(time);
 
     // Check for errors in kernel launch (e.g. invalid execution configuration paramters)
     cudaError_t cuErrSync = cudaGetLastError();
@@ -268,11 +272,6 @@ void euclidean_vec_norm_GPU(float *a, float *c, const unsigned int m,
         printf("CUDA Error - %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(cuErrAsync));
         exit(0);
     }
-
-    cudaDeviceSynchronize();
-    timestamp(&end); // Stop time measurement
-    myElapsedtime(start, end, &time);
-    printtime(time);
 
     // Copy data from device to CPU
     cudaErrorCheck(cudaMemcpy(c, d_C, vectorNumBytes, cudaMemcpyDeviceToHost));
@@ -305,8 +304,8 @@ int main(int argc, char *argv[])
     // Initialize host and local matrix A
     populate_matrix(h_A, m, n);
     populate_matrix(l_A, m, n);
-    //print_matrix(h_A, m, n);
-    //print_matrix(l_A, m, n);
+    // print_matrix(h_A, m, n);
+    // print_matrix(l_A, m, n);
 
     if (!compare_matrix(h_A, l_A, m, n))
     {
@@ -317,24 +316,35 @@ int main(int argc, char *argv[])
     // Initialize host and local array C for results
     populate_array(h_C, m, ZERO_VAL);
     populate_array(l_C, m, ZERO_VAL);
-    //print_array(h_C, m);
-    //print_array(l_C, m);
+    // print_array(h_C, m);
+    // print_array(l_C, m);
 
     // GPU Execution
     euclidean_vec_norm_GPU(h_A, h_C, m, n, block_size);
-    printf(" -> Calculate the Euclidean vector norm in the GPU (%d vectors, %d elements)\n", m, n);
+    printf(" -> Calculate in the GPU (%d vectors, %d elements with %d threads per block)\n", m, n, block_size);
 
     // CPU execution
     euclidean_vec_norm_CPU(l_A, l_C, m, n);
-    printf(" -> Calculate the Euclidean vector norm in the CPU (%d vectors, %d elements)\n", m, n);
+    printf(" -> Calculate in the CPU (%d vectors, %d elements with %d threads per block)\n", m, n, block_size);
 
-    //print_array(h_C, m);
-    //print_array(l_C, m);
+    // print_array(h_C, m);
+    // print_array(l_C, m);
 
     // Verify results
     if (!compare_array(l_C, h_C, m))
     {
         return -1;
+    }
+
+    int num_devices;
+    cudaGetDeviceCount(&num_devices);
+
+    for (int i = 0; i < num_devices; i++)
+    {
+        cudaDeviceProp dev_property;
+        cudaGetDeviceProperties(&dev_property, i);
+
+        printf(" Device                    = %d: %s\n", i, dev_property.name);
     }
 
     printf(" M                         = %d\n", m);
