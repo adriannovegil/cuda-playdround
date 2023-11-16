@@ -16,8 +16,8 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 
-const int N = 1024;                  // Número predeterm. de elementos en los vectores
-const int CUDA_BLK = 16;             // Tamaño predeterm. de bloque de hilos ƒCUDA
+const int N = 1024; // Número predeterm. de elementos en los vectores
+// const int CUDA_BLK = 16;             // Tamaño predeterm. de bloque de hilos ƒCUDA
 const int NUMBER_OF_SYSTEMS = 32760; // Cantidad de sistemas a calcular
 
 /**
@@ -247,7 +247,7 @@ void pcr_cpu(const unsigned int n)
     timestamp(&end);
     myElapsedtime(start, end, &time);
     printtime(time);
-    printf(" -> Reservar e inicializar vectores CPU (%u)\n\n", n);
+    printf(" -> Reservar e inicializar vectores CPU: (%u) elementos\n\n", n);
 
     // CPU execution
     timestamp(&start);
@@ -259,10 +259,10 @@ void pcr_cpu(const unsigned int n)
 
     calculateResult(h_A, h_B, h_C, h_D, n);
 
-    for (int j = 0; j < n; j++)
-    {
-        printf(" \t %f  \n", h_A[j]);
-    }
+    //for (int j = 0; j < n; j++)
+    //{
+    //    printf(" \t %f  \n", h_A[j]);
+    //}
 
     free(h_A);
     free(h_B);
@@ -289,9 +289,9 @@ __global__ void pcr_gpu_kernel(float *X, float *Y, float *Z, float *W,
     int row = threadIdx.y;
 
     float *Xs = (float *)array;
-    float *Ys = (float *)&Xs[number_of_systems * n];
-    float *Zs = (float *)&Ys[number_of_systems * n];
-    float *Ws = (float *)&Zs[number_of_systems * n];
+    float *Ys = (float *)&Xs[n];
+    float *Zs = (float *)&Ys[n];
+    float *Ws = (float *)&Zs[n];
 
     float Xr, Yr, Zr, Wr;
 
@@ -358,8 +358,7 @@ __global__ void pcr_gpu_kernel(float *X, float *Y, float *Z, float *W,
  * Función PCR en la GPU
  */
 void pcr_gpu(const unsigned int number_of_systems,
-             const unsigned int n,
-             const unsigned int block_size)
+             const unsigned int n)
 {
     // Para medir tiempos
     resnfo startgpu, endgpu;
@@ -387,21 +386,23 @@ void pcr_gpu(const unsigned int number_of_systems,
     timestamp(&endgpu);
     myElapsedtime(startgpu, endgpu, &timegpu);
     printtime(timegpu);
-    printf(" -> Reservar e inicializar vectores GPU (%u)\n\n", n);
+    printf(" -> Reservar e inicializar vectores GPU: (%u) sistemas de (%u) elementos\n\n", number_of_systems, n);
 
     // GPU Execution
     //  - threads_per_block: number of CUDA threads per grid block
     //	- blocks_in_grid   : number of blocks in grid
     //	(These are c structs with 3 member variables x, y, x)
     dim3 threads_per_block(1,
-                           block_size,
+                           n,
+                           // block_size,
                            1); // dim3 variable holds 3 dimensions
     dim3 blocks_in_grid(1,
                         number_of_systems,
                         // ceil(float(n) / threads_per_block.y),
                         1);
-    unsigned int sharedSize = numBytes * 4;
+    unsigned int sharedSize = n * sizeof(float) * 4;
     timestamp(&startgpu);
+    cudaFuncSetCacheConfig(pcr_gpu_kernel, cudaFuncCachePreferShared);
     pcr_gpu_kernel<<<blocks_in_grid, threads_per_block, sharedSize>>>(d_A, d_B, d_C, d_D, number_of_systems, n);
     cudaDeviceSynchronize();
     timestamp(&endgpu);
@@ -440,9 +441,9 @@ void pcr_gpu(const unsigned int number_of_systems,
                         n);
     }
 
-    printf(" Av= [");
-    print_matrix(A, number_of_systems, n);
-    printf("]\n\n");
+    //printf(" Av= [");
+    //print_matrix(A, number_of_systems, n);
+    //printf("]\n\n");
 
     // Free CPU and GPU memory
     cudaFree(d_A);
@@ -466,24 +467,30 @@ int main(int argc, char *argv[])
 {
     // Read program arguments
     unsigned int n = (argc > 1) ? atoi(argv[1]) : N;
-    unsigned int block_size = (argc > 2) ? atoi(argv[2]) : CUDA_BLK;
-    unsigned int number_of_systems = (argc > 3) ? atoi(argv[3]) : NUMBER_OF_SYSTEMS;
+    unsigned int number_of_systems = (argc > 2) ? atoi(argv[2]) : NUMBER_OF_SYSTEMS;
 
-    printf("--------------------------------\n");
+    printf("\n--------------------------------\n");
     printf(" Parallel Cyclic Reduction (PCR)\n");
     printf("--------------------------------\n");
+    printf(" Number of systems         = %d\n", number_of_systems);
+    printf(" System size               = %d\n", n);
+    printf(" Execution time            = \n\n");
+
+    if((n <= 0) || !((n &(n - 1)) == 0))
+    {
+        printf(" Error - The N value have to be >0 and power of 2\n");
+        return -1;
+    }
 
     // Llamada a la función d ejecución de la CPU
     pcr_cpu(n);
 
     // Llamada a la función d ejecución de la GPU
-    pcr_gpu(number_of_systems, n, block_size);
+    pcr_gpu(number_of_systems, n);
 
-    printf(" Number of systems         = %d\n", number_of_systems);
-    printf(" System size               = %d\n", n);
     printf("--------------------------------\n");
     printf(" SUCCESS\n");
-    printf("--------------------------------\n");
+    printf("--------------------------------\n\n");
 
     return (0);
 }
