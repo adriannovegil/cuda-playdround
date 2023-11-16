@@ -16,8 +16,9 @@
 #include <sys/time.h>
 #include <sys/resource.h>
 
-const int N = 1024;      // Número predeterm. de elementos en los vectores
-const int CUDA_BLK = 16; // Tamaño predeterm. de bloque de hilos ƒCUDA
+const int N = 1024;                  // Número predeterm. de elementos en los vectores
+const int CUDA_BLK = 16;             // Tamaño predeterm. de bloque de hilos ƒCUDA
+const int NUMBER_OF_SYSTEMS = 32760; // Cantidad de sistemas a calcular
 
 /**
  * Para medir el tiempo transcurrido (elapsed time):
@@ -72,9 +73,40 @@ void print_array(float *array, const unsigned int m)
 }
 
 /**
+ * Prints the values of the matrix to the screen
+ */
+void print_matrix(float *matrix, const unsigned int m, const unsigned int n)
+{
+    unsigned int i, j;
+    for (i = 0; i < m; i++)
+    {
+        for (j = 0; j < n; j++)
+        {
+            printf("%f ", matrix[i * n + j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+/**
+ * Function that comprate the elements of two array's
+ */
+bool compare_array(float *a1, float *a2, const unsigned int m)
+{
+    for (int i = 0; i < m; i++)
+        if (a1[i] != a2[i])
+        {
+            printf("Mismatch at index %d, was: %f, should be: %f\n", i, a1[i], a2[i]);
+            return false;
+        }
+    return true;
+}
+
+/**
  * Función para inicializar los vectores que vamos a utilizar
  */
-void Initialization(float A[], float B[], float C[], float D[], const unsigned int n)
+void systemInitialization(float A[], float B[], float C[], float D[], const unsigned int n)
 {
     unsigned int i;
 
@@ -97,13 +129,45 @@ void Initialization(float A[], float B[], float C[], float D[], const unsigned i
     D[n - 1] = 1.0;
 }
 
+/**
+ * Función que inicializa la matriz de sistemas
+ */
+void systemsInitialization(float A[], float B[], float C[], float D[],
+                           const unsigned int nSystems,
+                           const unsigned int nElements)
+{
+    unsigned int system;
+    for (system = 0; system < nSystems; system++)
+    {
+        systemInitialization(&A[(system * nElements)],
+                             &B[(system * nElements)],
+                             &C[(system * nElements)],
+                             &D[(system * nElements)],
+                             nElements);
+    }
+}
+
+/**
+ * Función que calcula el resutlado final del sistema
+ */
+void calculateResult(float X[], float Y[], float Z[], float W[], const unsigned int n)
+{
+    for (int j = 0; j < n / 2; j++)
+    {
+        float temp;
+        temp = Y[j + n / 2] * Y[j] - Z[j] * X[j + n / 2];
+        X[j] = (Y[j + n / 2] * W[j] - Z[j] * W[j + n / 2]) / temp;
+        X[j + n / 2] = (W[j + n / 2] * Y[j] - W[j] * X[j + n / 2]) / temp;
+    }
+}
+
 // CPU execution
 // ============================================================================
 
 /**
- * Función PCR en la CPU
+ *
  */
-void PCR_CPU(float X[], float Y[], float Z[], float W[], const unsigned int n)
+void pcr_cpu_kernel(float X[], float Y[], float Z[], float W[], const unsigned int n)
 {
     unsigned int i, k;
     unsigned ln = floor(log2(float(n)));
@@ -160,13 +224,7 @@ void PCR_CPU(float X[], float Y[], float Z[], float W[], const unsigned int n)
         }
     }
 
-    for (int j = 0; j < n / 2; j++)
-    {
-        float temp;
-        temp = Y[j + n / 2] * Y[j] - Z[j] * X[j + n / 2];
-        X[j] = (Y[j + n / 2] * W[j] - Z[j] * W[j + n / 2]) / temp;
-        X[j + n / 2] = (W[j + n / 2] * Y[j] - W[j] * X[j + n / 2]) / temp;
-    }
+    calculateResult(X, Y, Z, W, n);
 
     for (int j = 0; j < n; j++)
     {
@@ -174,36 +232,77 @@ void PCR_CPU(float X[], float Y[], float Z[], float W[], const unsigned int n)
     }
 }
 
-// GPU definition
+/**
+ * Función PCR en la CPU
+ */
+void pcr_cpu(const unsigned int n)
+{
+    // Para medir tiempos
+    resnfo start, end;
+    timenfo time;
+
+    unsigned int numBytes = n * sizeof(float);
+
+    // Reservamos e inicializamos vectores
+    timestamp(&start);
+    float *h_Av = (float *)malloc(numBytes);
+    float *h_Bv = (float *)malloc(numBytes);
+    float *h_Cv = (float *)malloc(numBytes);
+    float *h_Dv = (float *)malloc(numBytes);
+    systemInitialization(h_Av, h_Bv, h_Cv, h_Dv, n);
+    timestamp(&end);
+    myElapsedtime(start, end, &time);
+    printtime(time);
+    printf(" -> Reservar e inicializar vectores CPU (%u)\n\n", n);
+
+    // CPU execution
+    timestamp(&start);
+    pcr_cpu_kernel(h_Av, h_Bv, h_Cv, h_Dv, n);
+    timestamp(&end);
+    myElapsedtime(start, end, &time);
+    printtime(time);
+    printf(" -> PCR en la CPU\n\n");
+
+    free(h_Av);
+    free(h_Bv);
+    free(h_Cv);
+    free(h_Dv);
+}
+
+// GPU execution
 // ============================================================================
 
+/**
+ * Kernel definition
+ */
 extern __shared__ float array[];
-__global__ void PCR_GPU_kernel(float *X, float *Y, float *Z,
-                               float *W, const unsigned int n)
+__global__ void pcr_gpu_kernel(float *X, float *Y, float *Z, float *W,
+                               const unsigned int number_of_systems,
+                               const unsigned int n)
 {
     unsigned int i, k;
     unsigned ln = floor(log2(float(n)));
     float alpha, gamma;
 
-    int row = blockDim.y * blockIdx.y + threadIdx.y;
+    int global_pos = blockDim.y * blockIdx.y + threadIdx.y;
+    int row = threadIdx.y;
 
     float *Xs = (float *)array;
-    float *Ys = (float *)&Xs[n];
-    float *Zs = (float *)&Ys[n];
-    float *Ws = (float *)&Zs[n];
+    float *Ys = (float *)&Xs[number_of_systems * n];
+    float *Zs = (float *)&Ys[number_of_systems * n];
+    float *Ws = (float *)&Zs[number_of_systems * n];
 
     float Xr, Yr, Zr, Wr;
 
-    if (row < n)
+    if (global_pos < number_of_systems * n)
     {
-
         k = 1;
         for (i = 0; i < ln; i++)
         {
-            Xs[threadIdx.y] = X[row];
-            Ys[threadIdx.y] = Y[row];
-            Zs[threadIdx.y] = Z[row];
-            Ws[threadIdx.y] = W[row];
+            Xs[threadIdx.y] = X[global_pos];
+            Ys[threadIdx.y] = Y[global_pos];
+            Zs[threadIdx.y] = Z[global_pos];
+            Ws[threadIdx.y] = W[global_pos];
             // We synchronize threads to ensure the loading of the entire sub-array
             __syncthreads();
 
@@ -245,32 +344,51 @@ __global__ void PCR_GPU_kernel(float *X, float *Y, float *Z,
 
             // for (int j = 0; j < n; j++)
             //{
-            X[row] = Xr;
-            Y[row] = Yr;
-            Z[row] = Zr;
-            W[row] = Wr;
+            X[global_pos] = Xr;
+            Y[global_pos] = Yr;
+            Z[global_pos] = Zr;
+            W[global_pos] = Wr;
             //}
         }
     }
 }
 
-void PCR_GPU(float X[], float Y[], float Z[], float W[], const unsigned int n,
+/**
+ * Función PCR en la GPU
+ */
+void pcr_gpu(const unsigned int number_of_systems,
+             const unsigned int n,
              const unsigned int block_size)
 {
+    // Para medir tiempos
+    resnfo startgpu, endgpu;
+    timenfo timegpu;
+
     float *d_X, *d_Y, *d_Z, *d_W;
 
     // Número de bytes a reservar para nuestros vectores
-    unsigned int numBytes = n * sizeof(float);
+    unsigned int numBytes = number_of_systems * n * sizeof(float);
+    unsigned int systemsMatrixNumBytes = number_of_systems * n * sizeof(float);
 
+    // Reservamos e inicializamos vectores
+    timestamp(&startgpu);
+    float *X = (float *)malloc(systemsMatrixNumBytes);
+    float *Y = (float *)malloc(systemsMatrixNumBytes);
+    float *Z = (float *)malloc(systemsMatrixNumBytes);
+    float *W = (float *)malloc(systemsMatrixNumBytes);
+    systemsInitialization(X, Y, Z, W, number_of_systems, n);
     cudaMalloc(&d_X, numBytes);
     cudaMalloc(&d_Y, numBytes);
     cudaMalloc(&d_Z, numBytes);
     cudaMalloc(&d_W, numBytes);
-
     cudaMemcpy(d_X, X, numBytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_Y, Y, numBytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_Z, Z, numBytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_W, W, numBytes, cudaMemcpyHostToDevice);
+    timestamp(&endgpu);
+    myElapsedtime(startgpu, endgpu, &timegpu);
+    printtime(timegpu);
+    printf(" -> Reservar e inicializar vectores GPU (%u)\n\n", n);
 
     // Launch kernel
     //  - threads_per_block: number of CUDA threads per grid block
@@ -280,11 +398,33 @@ void PCR_GPU(float X[], float Y[], float Z[], float W[], const unsigned int n,
                            block_size,
                            1); // dim3 variable holds 3 dimensions
     dim3 blocks_in_grid(1,
-                        1,
+                        number_of_systems,
                         // ceil(float(n) / threads_per_block.y),
                         1);
-    unsigned int sharedSize = 4 * numBytes;
-    PCR_GPU_kernel<<<blocks_in_grid, threads_per_block, sharedSize>>>(d_X, d_Y, d_Z, d_W, n);
+    unsigned int sharedSize = numBytes * 4;
+    timestamp(&startgpu);
+    pcr_gpu_kernel<<<blocks_in_grid, threads_per_block, sharedSize>>>(d_X, d_Y, d_Z, d_W, number_of_systems, n);
+    cudaDeviceSynchronize();
+    timestamp(&endgpu);
+    myElapsedtime(startgpu, endgpu, &timegpu);
+    printtime(timegpu);
+    printf(" -> PCR en la GPU\n\n");
+
+    // Check for errors in kernel launch (e.g. invalid execution configuration paramters)
+    cudaError_t cuErrSync = cudaGetLastError();
+    if (cuErrSync != cudaSuccess)
+    {
+        printf("CUDA Error - %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(cuErrSync));
+        exit(0);
+    }
+
+    // Check for errors on the GPU after control is returned to CPU
+    cudaError_t cuErrAsync = cudaDeviceSynchronize();
+    if (cuErrAsync != cudaSuccess)
+    {
+        printf("CUDA Error - %s:%d: '%s'\n", __FILE__, __LINE__, cudaGetErrorString(cuErrAsync));
+        exit(0);
+    }
 
     // Copy data from device to CPU
     cudaMemcpy(X, d_X, numBytes, cudaMemcpyDeviceToHost);
@@ -292,80 +432,59 @@ void PCR_GPU(float X[], float Y[], float Z[], float W[], const unsigned int n,
     cudaMemcpy(Z, d_Z, numBytes, cudaMemcpyDeviceToHost);
     cudaMemcpy(W, d_W, numBytes, cudaMemcpyDeviceToHost);
 
-    for (int j = 0; j < n / 2; j++)
+    for (int i = 0; i < number_of_systems; i++)
     {
-        float temp;
-        temp = Y[j + n / 2] * Y[j] - Z[j] * X[j + n / 2];
-        X[j] = (Y[j + n / 2] * W[j] - Z[j] * W[j + n / 2]) / temp;
-        X[j + n / 2] = (W[j + n / 2] * Y[j] - W[j] * X[j + n / 2]) / temp;
+        calculateResult(&X[(i * n)],
+                        &Y[(i * n)],
+                        &Z[(i * n)],
+                        &W[(i * n)],
+                        n);
     }
 
-    for (int j = 0; j < n; j++)
-    {
-        printf(" \t %f  \n", X[j]);
-    }
+    printf(" Av= [");
+    print_matrix(X, number_of_systems, n);
+    printf("]\n\n");
 
     // Free CPU and GPU memory
     cudaFree(d_X);
     cudaFree(d_Y);
     cudaFree(d_Z);
     cudaFree(d_W);
+
+    free(X);
+    free(Y);
+    free(Z);
+    free(W);
 }
 
 // Main program
 // ============================================================================
+
 /**
  * Función principal
  */
 int main(int argc, char *argv[])
 {
-    // Para medir tiempos
-    resnfo start, end, startgpu, endgpu;
-    timenfo time, timegpu;
-
-    // Aceptamos algunos parámetros
-
-    // Número de elementos en los vectores (predeterminado: N)
+    // Read program arguments
     unsigned int n = (argc > 1) ? atoi(argv[1]) : N;
     unsigned int block_size = (argc > 2) ? atoi(argv[2]) : CUDA_BLK;
+    unsigned int number_of_systems = (argc > 3) ? atoi(argv[3]) : NUMBER_OF_SYSTEMS;
 
-    // Número de bytes a reservar para nuestros vectores
-    unsigned int numBytes = n * sizeof(float);
+    printf("--------------------------------\n");
+    printf(" Parallel Cyclic Reduction (PCR)\n");
+    printf("--------------------------------\n");
 
-    // Reservamos e inicializamos vectores
-    timestamp(&start);
-    float *Av = (float *)malloc(numBytes);
-    float *Bv = (float *)malloc(numBytes);
-    float *Cv = (float *)malloc(numBytes);
-    float *Dv = (float *)malloc(numBytes);
-    Initialization(Av, Bv, Cv, Dv, n);
-    timestamp(&end);
-    myElapsedtime(start, end, &time);
-    printtime(time);
-    printf(" -> Reservar e inicializar vectores (%u)\n\n", n);
+    // Llamada a la función d ejecución de la CPU
+    pcr_cpu(n);
 
-    // CPU execution
-    timestamp(&start);
-    PCR_CPU(Av, Bv, Cv, Dv, n);
-    timestamp(&end);
-    myElapsedtime(start, end, &time);
-    printtime(time);
-    printf(" -> PCR en la CPU\n\n");
+    // Llamada a la función d ejecución de la GPU
+    pcr_gpu(number_of_systems, n, block_size);
 
-    // GPU execution
-    Initialization(Av, Bv, Cv, Dv, n);
-
-    timestamp(&start);
-    PCR_GPU(Av, Bv, Cv, Dv, n, block_size);
-    timestamp(&end);
-    myElapsedtime(start, end, &time);
-    printtime(time);
-    printf(" -> PCR en la GPU\n\n");
-
-    free(Av);
-    free(Bv);
-    free(Cv);
-    free(Dv);
+    printf(" Number of systems         = %d\n", number_of_systems);
+    printf(" System size               = %d\n", n);
+    printf("--------------------------------\n");
+    printf(" SUCCESS\n");
+    printf("--------------------------------\n");
 
     return (0);
 }
