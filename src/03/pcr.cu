@@ -150,14 +150,14 @@ void systemsInitialization(float A[], float B[], float C[], float D[],
 /**
  * Función que calcula el resutlado final del sistema
  */
-void calculateResult(float X[], float Y[], float Z[], float W[], const unsigned int n)
+void calculateResult(float A[], float B[], float C[], float D[], const unsigned int n)
 {
     for (int j = 0; j < n / 2; j++)
     {
         float temp;
-        temp = Y[j + n / 2] * Y[j] - Z[j] * X[j + n / 2];
-        X[j] = (Y[j + n / 2] * W[j] - Z[j] * W[j + n / 2]) / temp;
-        X[j + n / 2] = (W[j + n / 2] * Y[j] - W[j] * X[j + n / 2]) / temp;
+        temp = B[j + n / 2] * B[j] - C[j] * A[j + n / 2];
+        A[j] = (B[j + n / 2] * D[j] - C[j] * D[j + n / 2]) / temp;
+        A[j + n / 2] = (D[j + n / 2] * B[j] - D[j] * A[j + n / 2]) / temp;
     }
 }
 
@@ -223,13 +223,6 @@ void pcr_cpu_kernel(float X[], float Y[], float Z[], float W[], const unsigned i
             W[j] = Wr[j];
         }
     }
-
-    calculateResult(X, Y, Z, W, n);
-
-    for (int j = 0; j < n; j++)
-    {
-        printf(" \t %f  \n", X[j]);
-    }
 }
 
 /**
@@ -241,15 +234,16 @@ void pcr_cpu(const unsigned int n)
     resnfo start, end;
     timenfo time;
 
+    // Número de bytes a reservar para nuestros vectores
     unsigned int numBytes = n * sizeof(float);
 
     // Reservamos e inicializamos vectores
     timestamp(&start);
-    float *h_Av = (float *)malloc(numBytes);
-    float *h_Bv = (float *)malloc(numBytes);
-    float *h_Cv = (float *)malloc(numBytes);
-    float *h_Dv = (float *)malloc(numBytes);
-    systemInitialization(h_Av, h_Bv, h_Cv, h_Dv, n);
+    float *h_A = (float *)malloc(numBytes);
+    float *h_B = (float *)malloc(numBytes);
+    float *h_C = (float *)malloc(numBytes);
+    float *h_D = (float *)malloc(numBytes);
+    systemInitialization(h_A, h_B, h_C, h_D, n);
     timestamp(&end);
     myElapsedtime(start, end, &time);
     printtime(time);
@@ -257,16 +251,23 @@ void pcr_cpu(const unsigned int n)
 
     // CPU execution
     timestamp(&start);
-    pcr_cpu_kernel(h_Av, h_Bv, h_Cv, h_Dv, n);
+    pcr_cpu_kernel(h_A, h_B, h_C, h_D, n);
     timestamp(&end);
     myElapsedtime(start, end, &time);
     printtime(time);
     printf(" -> PCR en la CPU\n\n");
 
-    free(h_Av);
-    free(h_Bv);
-    free(h_Cv);
-    free(h_Dv);
+    calculateResult(h_A, h_B, h_C, h_D, n);
+
+    for (int j = 0; j < n; j++)
+    {
+        printf(" \t %f  \n", h_A[j]);
+    }
+
+    free(h_A);
+    free(h_B);
+    free(h_C);
+    free(h_D);
 }
 
 // GPU execution
@@ -364,33 +365,31 @@ void pcr_gpu(const unsigned int number_of_systems,
     resnfo startgpu, endgpu;
     timenfo timegpu;
 
-    float *d_X, *d_Y, *d_Z, *d_W;
-
     // Número de bytes a reservar para nuestros vectores
     unsigned int numBytes = number_of_systems * n * sizeof(float);
-    unsigned int systemsMatrixNumBytes = number_of_systems * n * sizeof(float);
 
     // Reservamos e inicializamos vectores
     timestamp(&startgpu);
-    float *X = (float *)malloc(systemsMatrixNumBytes);
-    float *Y = (float *)malloc(systemsMatrixNumBytes);
-    float *Z = (float *)malloc(systemsMatrixNumBytes);
-    float *W = (float *)malloc(systemsMatrixNumBytes);
-    systemsInitialization(X, Y, Z, W, number_of_systems, n);
-    cudaMalloc(&d_X, numBytes);
-    cudaMalloc(&d_Y, numBytes);
-    cudaMalloc(&d_Z, numBytes);
-    cudaMalloc(&d_W, numBytes);
-    cudaMemcpy(d_X, X, numBytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_Y, Y, numBytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_Z, Z, numBytes, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_W, W, numBytes, cudaMemcpyHostToDevice);
+    float *d_A, *d_B, *d_C, *d_D;
+    float *A = (float *)malloc(numBytes);
+    float *B = (float *)malloc(numBytes);
+    float *C = (float *)malloc(numBytes);
+    float *D = (float *)malloc(numBytes);
+    systemsInitialization(A, B, C, D, number_of_systems, n);
+    cudaMalloc(&d_A, numBytes);
+    cudaMalloc(&d_B, numBytes);
+    cudaMalloc(&d_C, numBytes);
+    cudaMalloc(&d_D, numBytes);
+    cudaMemcpy(d_A, A, numBytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, numBytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_C, C, numBytes, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_D, D, numBytes, cudaMemcpyHostToDevice);
     timestamp(&endgpu);
     myElapsedtime(startgpu, endgpu, &timegpu);
     printtime(timegpu);
     printf(" -> Reservar e inicializar vectores GPU (%u)\n\n", n);
 
-    // Launch kernel
+    // GPU Execution
     //  - threads_per_block: number of CUDA threads per grid block
     //	- blocks_in_grid   : number of blocks in grid
     //	(These are c structs with 3 member variables x, y, x)
@@ -403,7 +402,7 @@ void pcr_gpu(const unsigned int number_of_systems,
                         1);
     unsigned int sharedSize = numBytes * 4;
     timestamp(&startgpu);
-    pcr_gpu_kernel<<<blocks_in_grid, threads_per_block, sharedSize>>>(d_X, d_Y, d_Z, d_W, number_of_systems, n);
+    pcr_gpu_kernel<<<blocks_in_grid, threads_per_block, sharedSize>>>(d_A, d_B, d_C, d_D, number_of_systems, n);
     cudaDeviceSynchronize();
     timestamp(&endgpu);
     myElapsedtime(startgpu, endgpu, &timegpu);
@@ -427,34 +426,34 @@ void pcr_gpu(const unsigned int number_of_systems,
     }
 
     // Copy data from device to CPU
-    cudaMemcpy(X, d_X, numBytes, cudaMemcpyDeviceToHost);
-    cudaMemcpy(Y, d_Y, numBytes, cudaMemcpyDeviceToHost);
-    cudaMemcpy(Z, d_Z, numBytes, cudaMemcpyDeviceToHost);
-    cudaMemcpy(W, d_W, numBytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(A, d_A, numBytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(B, d_B, numBytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(C, d_C, numBytes, cudaMemcpyDeviceToHost);
+    cudaMemcpy(D, d_D, numBytes, cudaMemcpyDeviceToHost);
 
     for (int i = 0; i < number_of_systems; i++)
     {
-        calculateResult(&X[(i * n)],
-                        &Y[(i * n)],
-                        &Z[(i * n)],
-                        &W[(i * n)],
+        calculateResult(&A[(i * n)],
+                        &B[(i * n)],
+                        &C[(i * n)],
+                        &D[(i * n)],
                         n);
     }
 
     printf(" Av= [");
-    print_matrix(X, number_of_systems, n);
+    print_matrix(A, number_of_systems, n);
     printf("]\n\n");
 
     // Free CPU and GPU memory
-    cudaFree(d_X);
-    cudaFree(d_Y);
-    cudaFree(d_Z);
-    cudaFree(d_W);
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+    cudaFree(d_D);
 
-    free(X);
-    free(Y);
-    free(Z);
-    free(W);
+    free(A);
+    free(B);
+    free(C);
+    free(D);
 }
 
 // Main program
